@@ -34,6 +34,31 @@ namespace ResourceScannerMod
         private static MelonPreferences_Entry<Key> _PrefToggleKey;
         private static MelonPreferences_Entry<bool> _PrefInstantSuck;
 
+
+        // Caching-Felder
+        private static List<CachedResourceData> _CachedResourceData = new List<CachedResourceData>();
+        private static List<CachedVacuumableData> _CachedVacuumableData = new List<CachedVacuumableData>();
+        private static float _LastDataUpdateTime = 0f;
+        private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
+
+        private struct CachedResourceData
+        {
+            public ResourceNodeUIInteractable Resource;
+            public Vector3 WorldPosition;
+            public Texture2D Icon;
+            public float Distance;
+            public bool IsHarvestable;
+        }
+
+        private struct CachedVacuumableData
+        {
+            public Vacuumable Vacuumable;
+            public Vector3 WorldPosition;
+            public Texture2D Icon;
+            public float Distance;
+        }
+
+        private static int _MaxDrawnResources = 100; // Maximal gleichzeitig gezeichnete Ressourcen
         #endregion
 
         #region Melon Methods
@@ -46,6 +71,12 @@ namespace ResourceScannerMod
             _PrefDetectionRadius = _PrefsCategory.CreateEntry("DetectionRadius", 200f, "Detection Radius");
             _PrefToggleKey = _PrefsCategory.CreateEntry("ToggleKey", Key.K, "Toggle Key");
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
+
+            // Neue Performance-Einstellungen
+            var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
+
+            // Werte anwenden
+            _MaxDrawnResources = _PrefMaxDrawnResources.Value;
 
             MelonPreferences.Load();
         }
@@ -106,144 +137,200 @@ namespace ResourceScannerMod
                 return;
 
             zEnsurePlayerTransform();
+            if (_PlayerTransform == null) return;
 
-            if (_PlayerTransform == null)
-                return;
-
-            var lAllResources = GameObject.FindObjectsOfType<ResourceNodeUIInteractable>();
-
-            int lTotalResources = (lAllResources != null ? lAllResources.Length : 0);
-
-            if (lTotalResources == 0)
+            // Nur die Datenberechnung weniger oft machen, GUI immer zeichnen
+            float currentTime = Time.time;
+            if (currentTime - _LastDataUpdateTime > _DataUpdateInterval)
             {
-                if (!_WaitingForResources)
-                {
-                    MelonLogger.Msg("No resourcenodes found yet – waiting...");
-                    _WaitingForResources = true;
-                }
-                return;
+                UpdateCachedData();
+                _LastDataUpdateTime = currentTime;
             }
-            else if (_WaitingForResources)
-            {
-                MelonLogger.Msg($"Resourcenodes found! ({lTotalResources} nodes)");
-                _WaitingForResources = false;
-            }
-
-            var lVacuumableResources = GameObject.FindObjectsOfType<Vacuumable>();
-            lTotalResources = (lVacuumableResources != null ? lVacuumableResources.Length : 0);
-
-            if (lTotalResources == 0)
-            {
-                if (!_WaitingForResources)
-                {
-                    MelonLogger.Msg("No vacuumableresources found yet – waiting...");
-                    _WaitingForResources = true;
-                }
-                return;
-            }
-            else if (_WaitingForResources)
-            {
-                MelonLogger.Msg($"Vacuumableresources found! ({lTotalResources} nodes)");
-                _WaitingForResources = false;
-            }
-
 
             _ShowResourcesInit = false;
 
-            foreach (var lResource in lAllResources.Where(r => r.gameObject.activeInHierarchy).ToList())
+            // GUI wird bei jedem Frame gezeichnet - kein Flackern
+            DrawCachedResourceData();
+        }
+
+        private static void UpdateCachedData()
+        {
+            if (_PlayerTransform == null) return;
+
+            var playerPos = _PlayerTransform.position;
+            var detectionRadius = _PrefDetectionRadius.Value;
+
+            // Resource Nodes verarbeiten
+            var allResources = GameObject.FindObjectsOfType<ResourceNodeUIInteractable>();
+            _CachedResourceData.Clear();
+
+            foreach (var resource in allResources)
             {
-                if (lResource?.transform == null || lResource.resourceNode == null)
-                    continue;
+                if (resource?.gameObject?.activeInHierarchy != true ||
+                    resource.resourceNode == null ||
+                    resource.transform == null) continue;
 
-                float lDistance = Vector3.Distance(_PlayerTransform.position, lResource.transform.position);
-                if (lDistance <= _PrefDetectionRadius.Value)
+                var worldPos = resource.transform.position;
+                var distance = Vector3.Distance(playerPos, worldPos);
+
+                if (distance > detectionRadius) continue;
+
+                // Icon nur einmal laden und cachen
+                Texture2D icon = null;
+                var resourcesList = resource.resourceNode.GetResources();
+                if (resourcesList?.Count > 0 && resourcesList[0]?.icon?.texture != null)
                 {
-                    float lScale = (lDistance / _PrefDetectionRadius.Value);
-                    if (lResource.resourceNode._harvestAtTime == 0)
-                    {
-                        if (_PrefInstantSuck.Value)
-                        {
-                            lResource.resourceNode._timeToHarvest = 0.01f;
-                            lResource.resourceNode._resourceSpawnDelaySeconds = 0.01f;
-                        }
+                    icon = resourcesList[0].icon.texture;
+                }
 
-                        zDrawResourceIcon(lResource, lScale);
+                if (icon == null) continue;
+
+                _CachedResourceData.Add(new CachedResourceData
+                {
+                    Resource = resource,
+                    WorldPosition = worldPos,
+                    Icon = icon,
+                    Distance = distance,
+                    IsHarvestable = resource.resourceNode._harvestAtTime == 0
+                });
+            }
+
+            // Vacuumables verarbeiten
+            var allVacuumables = GameObject.FindObjectsOfType<Vacuumable>();
+            _CachedVacuumableData.Clear();
+
+            foreach (var vacuumable in allVacuumables)
+            {
+                if (vacuumable?.transform == null ||
+                    vacuumable._identifiable?.identType?.groupType == null ||
+                    vacuumable._identifiable.identType.icon?.texture == null) continue;
+
+                var groupName = vacuumable._identifiable.identType.groupType.name;
+                if (groupName != "ResourceOreGroup" && groupName != "ResourceWeatherGroup") continue;
+
+                var worldPos = vacuumable.transform.position;
+                var distance = Vector3.Distance(playerPos, worldPos);
+
+                if (distance > detectionRadius) continue;
+
+                _CachedVacuumableData.Add(new CachedVacuumableData
+                {
+                    Vacuumable = vacuumable,
+                    WorldPosition = worldPos,
+                    Icon = vacuumable._identifiable.identType.icon.texture,
+                    Distance = distance
+                });
+            }
+
+            // Nach Distanz sortieren für bessere Performance beim Zeichnen
+            _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+        }
+
+
+        private static void DrawCachedResourceData()
+        {
+            if (Camera.main == null) return;
+
+            var camera = Camera.main;
+            var detectionRadius = _PrefDetectionRadius.Value;
+            int drawnCount = 0;
+            int maxDrawn = _MaxDrawnResources;
+
+            // Resources zeichnen
+            foreach (var data in _CachedResourceData)
+            {
+                if (drawnCount >= maxDrawn) break;
+
+                // Frustum Culling - nur sichtbare Objekte
+                Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
+                if (screenPos.z <= 0 ||
+                    screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
+                    screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
+
+                if (data.IsHarvestable)
+                {
+                    // Instant Suck nur bei den tatsächlich sichtbaren Objekten anwenden
+                    if (_PrefInstantSuck.Value && data.Resource?.resourceNode != null)
+                    {
+                        data.Resource.resourceNode._timeToHarvest = 0.01f;
+                        data.Resource.resourceNode._resourceSpawnDelaySeconds = 0.01f;
                     }
+
+                    float scale = data.Distance / detectionRadius;
+                    DrawResourceIcon(data.WorldPosition, data.Icon, scale);
+                    drawnCount++;
                 }
             }
 
-            foreach (var lVacuumable in lVacuumableResources)
+            // Vacuumables zeichnen
+            foreach (var data in _CachedVacuumableData)
             {
-                if (lVacuumable?.transform == null || lVacuumable?._identifiable?.identType?.groupType == null)
-                    continue;
+                if (drawnCount >= maxDrawn) break;
 
-                float lDistance = Vector3.Distance(_PlayerTransform.position, lVacuumable.transform.position);
-                if (lDistance <= _PrefDetectionRadius.Value)
-                {
-                    float lScale = (lDistance / _PrefDetectionRadius.Value);
-                    string lName = lVacuumable._identifiable.identType.groupType.name;
-                    if (lName == "ResourceOreGroup" || lName == "ResourceWeatherGroup")
-                    {
-                        zDrawVacuumableIcon(lVacuumable, lScale);
-                    }
-                }
+                Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
+                if (screenPos.z <= 0 ||
+                    screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
+                    screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
+
+                float scale = data.Distance / detectionRadius;
+                DrawVacuumableIcon(data.WorldPosition, data.Icon, scale);
+                drawnCount++;
             }
-
         }
 
-        private static void zDrawVacuumableIcon(Vacuumable pVacuumable, float pScale)
+        private static void DrawResourceIcon(Vector3 worldPos, Texture2D icon, float scale)
         {
-            if (pVacuumable == null || pVacuumable._identifiable == null || pVacuumable._identifiable.identType == null || pVacuumable._identifiable.identType.icon == null)
-                return;
+            Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
+            screenPos.y = Screen.height - screenPos.y;
 
-            if (Camera.main == null)
-                return;
+            // LOD-System für Icon-Größe
+            float baseSize = 50f;
+            float scaleValue = scale * 25f;
+            float iconSize = Mathf.Max(baseSize - scaleValue, 15f);
 
-            Vector3 lScreenPos = Camera.main.WorldToScreenPoint(pVacuumable.transform.position);
-            if (lScreenPos.z <= 0)
-                return;
+            Rect rect = new Rect(
+                screenPos.x - iconSize * 0.5f,
+                screenPos.y - iconSize * 0.5f,
+                iconSize,
+                iconSize
+            );
 
-            lScreenPos.y = Screen.height - lScreenPos.y;
-            float lScaleValue = pScale * 25;
-            Rect lRect = new Rect(lScreenPos.x - 25 + lScaleValue, lScreenPos.y - 25 + lScaleValue, 50 - lScaleValue, 50 - lScaleValue);
+            // Transparenz basierend auf Entfernung
+            float alpha = Mathf.Lerp(1f, 0.4f, scale);
 
-            GUI.color = Color.blue;
-            GUI.Box(lRect, GUIContent.none);
+            GUI.color = new Color(0, 0, 1, alpha * 0.8f);
+            GUI.Box(rect, GUIContent.none);
 
+            GUI.color = new Color(1, 1, 1, alpha);
+            GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
             GUI.color = Color.white;
-            GUI.DrawTexture(lRect, pVacuumable._identifiable.identType.icon.texture, ScaleMode.ScaleToFit, true);
         }
 
-
-        private static void zDrawResourceIcon(ResourceNodeUIInteractable pResource, float pScale)
+        private static void DrawVacuumableIcon(Vector3 worldPos, Texture2D icon, float scale)
         {
-            if (pResource == null || pResource.resourceNode == null || pResource.transform == null)
-                return;
+            Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
+            screenPos.y = Screen.height - screenPos.y;
 
-            var lResourcesList = pResource.resourceNode.GetResources();
-            if (lResourcesList == null || lResourcesList.Count == 0)
-                return;
+            float baseSize = 50f;
+            float scaleValue = scale * 25f;
+            float iconSize = Mathf.Max(baseSize - scaleValue, 15f);
 
-            var lResourceData = lResourcesList[0];
-            if (lResourceData == null || lResourceData.icon == null || lResourceData.icon.texture == null)
-                return;
+            Rect rect = new Rect(
+                screenPos.x - iconSize * 0.5f,
+                screenPos.y - iconSize * 0.5f,
+                iconSize,
+                iconSize
+            );
 
-            if (Camera.main == null)
-                return;
+            float alpha = Mathf.Lerp(1f, 0.4f, scale);
 
-            Vector3 lScreenPos = Camera.main.WorldToScreenPoint(pResource.transform.position);
-            if (lScreenPos.z <= 0)
-                return;
+            GUI.color = new Color(0, 0, 1, alpha * 0.8f);
+            GUI.Box(rect, GUIContent.none);
 
-            lScreenPos.y = Screen.height - lScreenPos.y;
-            float lScaleValue = pScale * 25;
-            Rect lRect = new Rect(lScreenPos.x - 25 + lScaleValue, lScreenPos.y - 25 + lScaleValue, 50 - lScaleValue, 50 - lScaleValue);
-
-            GUI.color = Color.blue;
-            GUI.Box(lRect, GUIContent.none);
-
+            GUI.color = new Color(1, 1, 1, alpha);
+            GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
             GUI.color = Color.white;
-            GUI.DrawTexture(lRect, lResourceData.icon.texture, ScaleMode.ScaleToFit, true);
         }
 
         private static void zEnsurePlayerTransform()
