@@ -33,11 +33,13 @@ namespace ResourceScannerMod
         private static MelonPreferences_Entry<float> _PrefDetectionRadius;
         private static MelonPreferences_Entry<Key> _PrefToggleKey;
         private static MelonPreferences_Entry<bool> _PrefInstantSuck;
+        private static MelonPreferences_Entry<bool> _PrefShowTreasurePod;
 
 
         // Caching-Felder
         private static List<CachedResourceData> _CachedResourceData = new List<CachedResourceData>();
         private static List<CachedVacuumableData> _CachedVacuumableData = new List<CachedVacuumableData>();
+        private static List<CachedTreasurePodData> _CachedTreasurePodData = new List<CachedTreasurePodData>();
         private static float _LastDataUpdateTime = 0f;
         private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
 
@@ -48,6 +50,15 @@ namespace ResourceScannerMod
             public Texture2D Icon;
             public float Distance;
             public bool IsHarvestable;
+        }
+
+        private struct CachedTreasurePodData
+        {
+            public TreasurePodUIInteractable TreasurePod;
+            public Vector3 WorldPosition;
+            public Texture2D Icon;
+            public float Distance;
+            public bool IsCollectable;
         }
 
         private struct CachedVacuumableData
@@ -71,6 +82,7 @@ namespace ResourceScannerMod
             _PrefDetectionRadius = _PrefsCategory.CreateEntry("DetectionRadius", 200f, "Detection Radius");
             _PrefToggleKey = _PrefsCategory.CreateEntry("ToggleKey", Key.K, "Toggle Key");
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
+            _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
 
             // Neue Performance-Einstellungen
             var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
@@ -222,6 +234,37 @@ namespace ResourceScannerMod
                 });
             }
 
+            if (_PrefShowTreasurePod.Value)
+            {
+                // TreasurePod verarbeiten
+                var allTreasurePod = GameObject.FindObjectsOfType<TreasurePodUIInteractable>();
+                _CachedTreasurePodData.Clear();
+
+                foreach (var treasurePod in allTreasurePod)
+                {
+                    if (treasurePod?.transform == null ||
+                        treasurePod.treasurePod?.Blueprint?.icon == null) continue;
+
+                    if (!treasurePod.treasurePod.IsLocked) continue;
+
+                    var worldPos = treasurePod.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedTreasurePodData.Add(new CachedTreasurePodData()
+                    {
+                        TreasurePod = treasurePod,
+                        WorldPosition = worldPos,
+                        Icon = treasurePod.treasurePod?.Blueprint?.icon.texture,
+                        Distance = distance
+                    });
+                }
+
+                // Nach Distanz sortieren für bessere Performance beim Zeichnen
+                _CachedTreasurePodData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            }
+
             // Nach Distanz sortieren für bessere Performance beim Zeichnen
             _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
@@ -258,7 +301,7 @@ namespace ResourceScannerMod
                     }
 
                     float scale = data.Distance / detectionRadius;
-                    DrawResourceIcon(data.WorldPosition, data.Icon, scale);
+                    DrawIcon(data.WorldPosition, data.Icon, scale);
                     drawnCount++;
                 }
             }
@@ -274,12 +317,32 @@ namespace ResourceScannerMod
                     screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
 
                 float scale = data.Distance / detectionRadius;
-                DrawVacuumableIcon(data.WorldPosition, data.Icon, scale);
+                DrawIcon(data.WorldPosition, data.Icon, scale);
                 drawnCount++;
             }
+
+            if (_PrefShowTreasurePod.Value)
+            {
+                // TreasurePod zeichnen
+                foreach (var data in _CachedTreasurePodData)
+                {
+                    if (drawnCount >= maxDrawn) break;
+
+                    Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
+                    if (screenPos.z <= 0 ||
+                        screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
+                        screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
+
+                    float scale = data.Distance / detectionRadius;
+                    DrawIcon(data.WorldPosition, data.Icon, scale);
+                    drawnCount++;
+                }
+            }
+        
+        
         }
 
-        private static void DrawResourceIcon(Vector3 worldPos, Texture2D icon, float scale)
+        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float scale)
         {
             Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
             screenPos.y = Screen.height - screenPos.y;
@@ -297,32 +360,6 @@ namespace ResourceScannerMod
             );
 
             // Transparenz basierend auf Entfernung
-            float alpha = Mathf.Lerp(1f, 0.4f, scale);
-
-            GUI.color = new Color(0, 0, 1, alpha * 0.8f);
-            GUI.Box(rect, GUIContent.none);
-
-            GUI.color = new Color(1, 1, 1, alpha);
-            GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
-            GUI.color = Color.white;
-        }
-
-        private static void DrawVacuumableIcon(Vector3 worldPos, Texture2D icon, float scale)
-        {
-            Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
-            screenPos.y = Screen.height - screenPos.y;
-
-            float baseSize = 50f;
-            float scaleValue = scale * 25f;
-            float iconSize = Mathf.Max(baseSize - scaleValue, 15f);
-
-            Rect rect = new Rect(
-                screenPos.x - iconSize * 0.5f,
-                screenPos.y - iconSize * 0.5f,
-                iconSize,
-                iconSize
-            );
-
             float alpha = Mathf.Lerp(1f, 0.4f, scale);
 
             GUI.color = new Color(0, 0, 1, alpha * 0.8f);
