@@ -301,8 +301,9 @@ namespace ResourceScannerMod
                         data.Resource.resourceNode._resourceSpawnDelaySeconds = 0.01f;
                     }
 
-                    float scale = data.Distance / detectionRadius;
-                    DrawIcon(data.WorldPosition, data.Icon, scale);
+                    float scale = Remap(data.Distance, 0f, 300f, 0f, 1f);
+                    scale = Mathf.Clamp01(scale);
+                    DrawIcon(data.WorldPosition, data.Icon, scale, Color.green);
                     drawnCount++;
                 }
             }
@@ -317,8 +318,9 @@ namespace ResourceScannerMod
                     screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
                     screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
 
-                float scale = data.Distance / detectionRadius;
-                DrawIcon(data.WorldPosition, data.Icon, scale);
+                float scale = Remap(data.Distance, 0f, 215f, 0f, 1f);
+                scale = Mathf.Clamp01(scale);
+                DrawIcon(data.WorldPosition, data.Icon, scale, Color.red);
                 drawnCount++;
             }
 
@@ -334,8 +336,9 @@ namespace ResourceScannerMod
                         screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
                         screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
 
-                    float scale = data.Distance / detectionRadius;
-                    DrawIcon(data.WorldPosition, data.Icon, scale);
+                    float scale = Remap(data.Distance, 0f, 300f, 0f, 1f);
+                    scale = Mathf.Clamp01(scale);
+                    DrawIcon(data.WorldPosition, data.Icon, scale, Color.blue);
                     drawnCount++;
                 }
             }
@@ -343,7 +346,13 @@ namespace ResourceScannerMod
         
         }
 
-        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float scale)
+
+        public static float Remap(float value, float from1, float to1, float from2, float to2)
+        {
+            return from2 + (value - from1) * (to2 - from2) / (to1 - from1);
+        }
+
+        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float scale, Color uniqueColor)
         {
             Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
             screenPos.y = Screen.height - screenPos.y;
@@ -360,17 +369,29 @@ namespace ResourceScannerMod
                 iconSize
             );
 
-            // Transparenz basierend auf Entfernung
+            // Transparenz
             float alpha = Mathf.Lerp(1f, 0.4f, scale);
 
-            GUI.color = new Color(0, 0, 1, alpha * 0.8f);
+            GUI.color = new Color(0f, 0f, 1f, alpha * 0.8f);
             GUI.Box(rect, GUIContent.none);
 
-            GUI.color = new Color(1, 1, 1, alpha);
-            GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
-            GUI.color = Color.white;
-        }
+            // --- Icon: Weit weg = stark UniqueColor, nah = fast weiß, aber mit Rest-Farbe ---
+            Color baseIconColor = new Color(1f, 1f, 1f, alpha);
 
+            // Faktor für die Mischung
+            float t = 1f - scale;
+            // dafür sorgen, dass immer mind. 20% UniqueColor erhalten bleibt
+            float minUnique = 0.2f;
+            float uniqueWeight = Mathf.Lerp(1f, minUnique, t);
+
+            Color finalIconColor = (uniqueColor * uniqueWeight) + (baseIconColor * (1f - uniqueWeight));
+            finalIconColor.a = alpha; // wichtig: Alpha nicht überschreiben
+
+            GUI.color = finalIconColor;
+            GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
+
+            GUI.color = Color.white; // Reset
+        }
         private static void zEnsurePlayerTransform()
         {
             if (_PlayerTransform != null) return;
