@@ -242,8 +242,9 @@ namespace ResourceScannerMod
 
                 foreach (var treasurePod in allTreasurePod)
                 {
-                    if (treasurePod?.transform == null ||
-                        treasurePod.treasurePod?.Blueprint?.icon == null) continue;
+                    var lIcon = treasurePod.treasurePod?.Blueprint?.icon.texture ?? treasurePod.treasurePod?.UpgradeComponent?.Icon?.texture ?? treasurePod.treasurePod?.SpawnObjs[0]?.icon?.texture;
+                   
+                    if (treasurePod?.transform == null || lIcon == null) continue;
 
                     if (!treasurePod.treasurePod.IsLocked) continue;
 
@@ -256,7 +257,7 @@ namespace ResourceScannerMod
                     {
                         TreasurePod = treasurePod,
                         WorldPosition = worldPos,
-                        Icon = treasurePod.treasurePod?.Blueprint?.icon.texture,
+                        Icon = lIcon,
                         Distance = distance
                     });
                 }
