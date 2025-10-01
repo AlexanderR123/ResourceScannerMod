@@ -34,6 +34,7 @@ namespace ResourceScannerMod
         private static MelonPreferences_Entry<Key> _PrefToggleKey;
         private static MelonPreferences_Entry<bool> _PrefInstantSuck;
         private static MelonPreferences_Entry<bool> _PrefShowTreasurePod;
+        private static MelonPreferences_Entry<bool> _PrefEnableColors;
 
 
         // Caching-Felder
@@ -43,31 +44,30 @@ namespace ResourceScannerMod
         private static float _LastDataUpdateTime = 0f;
         private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
 
-        private struct CachedResourceData
+        public abstract class CachedWorldIconData
         {
-            public ResourceNodeUIInteractable Resource;
             public Vector3 WorldPosition;
             public Texture2D Icon;
             public float Distance;
+        }
+
+        public class CachedResourceData : CachedWorldIconData
+        {
+            public ResourceNodeUIInteractable Resource;
             public bool IsHarvestable;
         }
 
-        private struct CachedTreasurePodData
+        public class CachedTreasurePodData : CachedWorldIconData
         {
             public TreasurePodUIInteractable TreasurePod;
-            public Vector3 WorldPosition;
-            public Texture2D Icon;
-            public float Distance;
             public bool IsCollectable;
         }
 
-        private struct CachedVacuumableData
+        public class CachedVacuumableData : CachedWorldIconData
         {
             public Vacuumable Vacuumable;
-            public Vector3 WorldPosition;
-            public Texture2D Icon;
-            public float Distance;
         }
+
 
         private static int _MaxDrawnResources = 100; // Maximal gleichzeitig gezeichnete Ressourcen
         #endregion
@@ -83,6 +83,7 @@ namespace ResourceScannerMod
             _PrefToggleKey = _PrefsCategory.CreateEntry("ToggleKey", Key.K, "Toggle Key");
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
             _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
+            _PrefEnableColors = _PrefsCategory.CreateEntry("EnableTintColors", false, "Enable colored tint on icons");
 
             // Neue Performance-Einstellungen
             var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
@@ -243,7 +244,7 @@ namespace ResourceScannerMod
                 foreach (var treasurePod in allTreasurePod)
                 {
                     var lIcon = treasurePod.treasurePod?.Blueprint?.icon.texture ?? treasurePod.treasurePod?.UpgradeComponent?.Icon?.texture ?? treasurePod.treasurePod?.SpawnObjs[0]?.icon?.texture;
-                   
+
                     if (treasurePod?.transform == null || lIcon == null) continue;
 
                     if (!treasurePod.treasurePod.IsLocked) continue;
@@ -277,73 +278,93 @@ namespace ResourceScannerMod
             if (Camera.main == null) return;
 
             var camera = Camera.main;
-            var detectionRadius = _PrefDetectionRadius.Value;
             int drawnCount = 0;
             int maxDrawn = _MaxDrawnResources;
 
-            // Resources zeichnen
-            foreach (var data in _CachedResourceData)
-            {
-                if (drawnCount >= maxDrawn) break;
-
-                // Frustum Culling - nur sichtbare Objekte
-                Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
-                if (screenPos.z <= 0 ||
-                    screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
-                    screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
-
-                if (data.IsHarvestable)
+            // -------------------
+            // Resources
+            // -------------------
+            DrawDataList(
+                _CachedResourceData,
+                camera,
+                ref drawnCount,
+                maxDrawn,
+                300f,
+                Color.green,
+                data =>
                 {
-                    // Instant Suck nur bei den tatsächlich sichtbaren Objekten anwenden
-                    if (_PrefInstantSuck.Value && data.Resource?.resourceNode != null)
+                    if (data.IsHarvestable && _PrefInstantSuck.Value && data.Resource?.resourceNode != null)
                     {
                         data.Resource.resourceNode._timeToHarvest = 0.01f;
                         data.Resource.resourceNode._resourceSpawnDelaySeconds = 0.01f;
                     }
-
-                    float scale = Remap(data.Distance, 0f, 300f, 0f, 1f);
-                    scale = Mathf.Clamp01(scale);
-                    DrawIcon(data.WorldPosition, data.Icon, scale, Color.green);
-                    drawnCount++;
                 }
-            }
+            );
 
-            // Vacuumables zeichnen
-            foreach (var data in _CachedVacuumableData)
+            // -------------------
+            // Vacuumables
+            // -------------------
+            DrawDataList(
+                _CachedVacuumableData,
+                camera,
+                ref drawnCount,
+                maxDrawn,
+                215f,
+                Color.red
+            );
+
+            // -------------------
+            // TreasurePods
+            // -------------------
+            if (_PrefShowTreasurePod.Value)
+            {
+                DrawDataList(
+                    _CachedTreasurePodData,
+                    camera,
+                    ref drawnCount,
+                    maxDrawn,
+                    300f,
+                    Color.blue
+                );
+            }
+        }
+
+
+        /// <summary>
+        /// Generische Draw-Methode für alle Caches
+        /// </summary>
+        private static void DrawDataList<T>(
+            IEnumerable<T> dataList,
+            Camera camera,
+            ref int drawnCount,
+            int maxDrawn,
+            float maxDistance,
+            Color uniqueColor,
+            Action<T>? specialAction = null
+        ) where T : CachedWorldIconData
+        {
+            foreach (var data in dataList)
             {
                 if (drawnCount >= maxDrawn) break;
 
+                // --- Frustum Culling ---
                 Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
                 if (screenPos.z <= 0 ||
                     screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
-                    screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
+                    screenPos.y < -50 || screenPos.y > Screen.height + 50)
+                    continue;
 
-                float scale = Remap(data.Distance, 0f, 215f, 0f, 1f);
-                scale = Mathf.Clamp01(scale);
-                DrawIcon(data.WorldPosition, data.Icon, scale, Color.red);
+                // Speziallogik optional ausführen (z. B. InstantSuck nur bei Resources)
+                specialAction?.Invoke(data);
+
+                // --- Scale ---
+                float smoothScale = Mathf.Clamp01(Remap(data.Distance, 0f, 215f, 0f, 1f));
+
+                int steps = 4;
+                // --- Icon zeichnen ---
+                DrawIcon(data.WorldPosition, data.Icon, smoothScale, uniqueColor, steps);
                 drawnCount++;
             }
-
-            if (_PrefShowTreasurePod.Value)
-            {
-                // TreasurePod zeichnen
-                foreach (var data in _CachedTreasurePodData)
-                {
-                    if (drawnCount >= maxDrawn) break;
-
-                    Vector3 screenPos = camera.WorldToScreenPoint(data.WorldPosition);
-                    if (screenPos.z <= 0 ||
-                        screenPos.x < -50 || screenPos.x > Screen.width + 50 ||
-                        screenPos.y < -50 || screenPos.y > Screen.height + 50) continue;
-
-                    float scale = Remap(data.Distance, 0f, 300f, 0f, 1f);
-                    scale = Mathf.Clamp01(scale);
-                    DrawIcon(data.WorldPosition, data.Icon, scale, Color.blue);
-                    drawnCount++;
-                }
-            }
-        
-        
         }
 
 
@@ -352,14 +373,14 @@ namespace ResourceScannerMod
             return from2 + (value - from1) * (to2 - from2) / (to1 - from1);
         }
 
-        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float scale, Color uniqueColor)
+        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float smoothScale, Color uniqueColor, int colorSteps = 5)
         {
             Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
             screenPos.y = Screen.height - screenPos.y;
 
-            // LOD-System für Icon-Größe
+            // ---------- Größe ----------
             float baseSize = 50f;
-            float scaleValue = scale * 25f;
+            float scaleValue = smoothScale * 25f;
             float iconSize = Mathf.Max(baseSize - scaleValue, 15f);
 
             Rect rect = new Rect(
@@ -369,29 +390,38 @@ namespace ResourceScannerMod
                 iconSize
             );
 
-            // Transparenz
-            float alpha = Mathf.Lerp(1f, 0.4f, scale);
+            // ---------- Transparenz ----------
+            float alpha = Mathf.Lerp(1f, 0.4f, smoothScale);
 
+            // ---------- Box (immer blau) ----------
             GUI.color = new Color(0f, 0f, 1f, alpha * 0.8f);
             GUI.Box(rect, GUIContent.none);
 
-            // --- Icon: Weit weg = stark UniqueColor, nah = fast weiß, aber mit Rest-Farbe ---
-            Color baseIconColor = new Color(1f, 1f, 1f, alpha);
+            // ---------- Farbe fürs Icon ----------
+            Color iconColor;
 
-            // Faktor für die Mischung
-            float t = 1f - scale;
-            // dafür sorgen, dass immer mind. 20% UniqueColor erhalten bleibt
-            float minUnique = 0.2f;
-            float uniqueWeight = Mathf.Lerp(1f, minUnique, t);
+            if (_PrefEnableColors.Value)
+            {
+                // Step Scale (z. B. 5 Stufen)
+                float stepScale = Mathf.Round(smoothScale * colorSteps) / colorSteps;
 
-            Color finalIconColor = (uniqueColor * uniqueWeight) + (baseIconColor * (1f - uniqueWeight));
-            finalIconColor.a = alpha; // wichtig: Alpha nicht überschreiben
+                // "nah" -> weiß, "fern" -> uniqueColor
+                Color baseIconColor = new Color(1f, 1f, 1f, alpha);
+                iconColor = Color.Lerp(baseIconColor, uniqueColor, stepScale);
+                iconColor.a = alpha;
+            }
+            else
+            {
+                // Default nur weiß
+                iconColor = new Color(1f, 1f, 1f, alpha);
+            }
 
-            GUI.color = finalIconColor;
+            GUI.color = iconColor;
             GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
 
-            GUI.color = Color.white; // Reset
+            GUI.color = Color.white; // reset
         }
+
         private static void zEnsurePlayerTransform()
         {
             if (_PlayerTransform != null) return;
