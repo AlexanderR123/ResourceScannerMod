@@ -1,21 +1,12 @@
 ﻿using Il2Cpp;
-using Il2CppInterop.Runtime;
-using Il2CppInterop.Runtime.InteropTypes;
 using Il2CppMonomiPark.SlimeRancher;
-using Il2CppMonomiPark.SlimeRancher.Labyrinth;
 using Il2CppMonomiPark.SlimeRancher.UI;
-using Il2CppSystem.Collections;
-using Il2CppSystem.Data;
-using Il2CppSystem.Xml;
-using Il2CppSystem.Xml.Serialization;
 using MelonLoader;
 using System.Reflection;
 using UnityEngine;
-using UnityEngine.AI;
 using UnityEngine.InputSystem;
-using UnityEngine.SceneManagement;
 
-[assembly: MelonInfo(typeof(ResourceScannerMod.Core), "ResourceScannerMod", "1.0.0", "AlexanderR123", null)]
+[assembly: MelonInfo(typeof(ResourceScannerMod.Core), "ResourceScannerMod", "auto", "AlexanderR123", null)]
 [assembly: MelonGame("MonomiPark", "SlimeRancher2")]
 
 namespace ResourceScannerMod
@@ -35,18 +26,24 @@ namespace ResourceScannerMod
         private static MelonPreferences_Entry<bool> _PrefInstantSuck;
         private static MelonPreferences_Entry<bool> _PrefShowTreasurePod;
         private static MelonPreferences_Entry<bool> _PrefEnableColors;
+        private static MelonPreferences_Entry<bool> _PrefShowGordo;
+        private static MelonPreferences_Entry<bool> _PrefShowDirectedAnimalSpawner;
 
 
         // Caching-Felder
         private static List<CachedResourceData> _CachedResourceData = new List<CachedResourceData>();
         private static List<CachedVacuumableData> _CachedVacuumableData = new List<CachedVacuumableData>();
         private static List<CachedTreasurePodData> _CachedTreasurePodData = new List<CachedTreasurePodData>();
+        private static List<CachedGordoData> _CachedGordoData = new List<CachedGordoData>();
+        private static List<CachedDirectedAnimalSpawnerData> _CachedDirectedAnimalSpawnerData =new List<CachedDirectedAnimalSpawnerData>();
+
         private static float _LastDataUpdateTime = 0f;
         private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
 
         public abstract class CachedWorldIconData
         {
             public Vector3 WorldPosition;
+            public string Letter;
             public Texture2D Icon;
             public float Distance;
         }
@@ -68,6 +65,17 @@ namespace ResourceScannerMod
             public Vacuumable Vacuumable;
         }
 
+        public class CachedGordoData : CachedWorldIconData
+        {
+            public GordoIdentifiable Gordo;
+            public bool IsActive;
+        }
+
+        public class CachedDirectedAnimalSpawnerData : CachedWorldIconData
+        {
+            public DirectedAnimalSpawner Spawner;
+            public bool IsAvailable;
+        }
 
         private static int _MaxDrawnResources = 100; // Maximal gleichzeitig gezeichnete Ressourcen
         #endregion
@@ -84,7 +92,8 @@ namespace ResourceScannerMod
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
             _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
             _PrefEnableColors = _PrefsCategory.CreateEntry("EnableTintColors", false, "Enable colored tint on icons");
-
+            _PrefShowGordo = _PrefsCategory.CreateEntry("ShowGordo",false,"Shows Gordos");
+            _PrefShowDirectedAnimalSpawner = _PrefsCategory.CreateEntry("ShowDirectedAnimalSpawner",false,"Shows Directed Animal Spawners");
             // Neue Performance-Einstellungen
             var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
 
@@ -267,6 +276,74 @@ namespace ResourceScannerMod
                 _CachedTreasurePodData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             }
 
+            if (_PrefShowGordo.Value)
+            {
+                var allGordos = GameObject.FindObjectsOfType<GordoIdentifiable>();
+                _CachedGordoData.Clear();
+
+                foreach (var gordo in allGordos)
+                {
+                    if (gordo?.transform == null) continue;
+
+                    var lIcon = gordo.identType?.Icon?.texture;
+                    if (lIcon == null) continue;
+
+                    // Beispiel: nur aktive/lebende Gordos
+                    if (!gordo.isActiveAndEnabled) continue;
+
+                    var worldPos = gordo.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedGordoData.Add(
+                        new CachedGordoData()
+                        {
+                            Gordo = gordo,
+                            WorldPosition = worldPos,
+                            Icon = lIcon,
+                            Distance = distance,
+                            IsActive = gordo.isActiveAndEnabled
+                        }
+                    );
+                }
+
+                // Nach Distanz sortieren für bessere Performance beim Zeichnen
+                _CachedGordoData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            }
+
+            if (_PrefShowDirectedAnimalSpawner.Value)
+            {
+                var allSpawners = GameObject.FindObjectsOfType<DirectedAnimalSpawner>();
+
+                _CachedDirectedAnimalSpawnerData.Clear();
+
+                foreach (var spawner in allSpawners)
+                {
+                    if (spawner?.transform == null)
+                        continue;
+
+                    var worldPos = spawner.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius)
+                        continue;
+
+                    _CachedDirectedAnimalSpawnerData.Add(new CachedDirectedAnimalSpawnerData()
+                    {
+                        Spawner = spawner,
+                        WorldPosition = worldPos,
+                        Letter = "N", // N für Nest
+                        Distance = distance,
+                        IsAvailable = spawner.enabled // oder eine andere Logik wenn nötig
+                    });
+                }
+
+                _CachedDirectedAnimalSpawnerData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
             // Nach Distanz sortieren für bessere Performance beim Zeichnen
             _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
@@ -289,7 +366,7 @@ namespace ResourceScannerMod
                 camera,
                 ref drawnCount,
                 maxDrawn,
-                300f,
+                215f,
                 Color.green,
                 data =>
                 {
@@ -323,12 +400,36 @@ namespace ResourceScannerMod
                     camera,
                     ref drawnCount,
                     maxDrawn,
-                    300f,
+                    215f,
                     Color.blue
                 );
             }
-        }
 
+            if (_PrefShowGordo.Value)
+            {
+                DrawDataList(
+                    _CachedGordoData,
+                    camera,
+                    ref drawnCount,
+                    maxDrawn,
+                    215f, // ggf. anderer Offset als bei Pods
+                    Color.white
+                );
+            }
+
+            if (_PrefShowDirectedAnimalSpawner.Value)
+            {
+                DrawDataList(
+                    _CachedDirectedAnimalSpawnerData,
+                    camera,
+                    ref drawnCount,
+                    maxDrawn,
+                    300f,
+                    Color.green
+                );
+            }
+
+        }
 
         /// <summary>
         /// Generische Draw-Methode für alle Caches
@@ -361,8 +462,16 @@ namespace ResourceScannerMod
                 float smoothScale = Mathf.Clamp01(Remap(data.Distance, 0f, 215f, 0f, 1f));
 
                 int steps = 4;
-                // --- Icon zeichnen ---
-                DrawIcon(data.WorldPosition, data.Icon, smoothScale, uniqueColor, steps);
+
+                if (data.Icon == null)
+                {
+                    DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale, uniqueColor);
+                }
+                else
+                {
+                    // --- Icon zeichnen ---
+                    DrawIcon(data.WorldPosition, data.Icon, smoothScale, uniqueColor, steps);
+                }
                 drawnCount++;
             }
         }
@@ -420,6 +529,48 @@ namespace ResourceScannerMod
             GUI.DrawTexture(rect, icon, ScaleMode.ScaleToFit, true);
 
             GUI.color = Color.white; // reset
+        }
+
+        private static Color GetContrastColor(Color bg)
+        {
+            // relative Helligkeit berechnen
+            float luminance = (0.299f * bg.r + 0.587f * bg.g + 0.114f * bg.b);
+            return luminance > 0.5f ? Color.black : Color.white;
+        }
+
+        private static void DrawLetterMarker(
+    Vector3 worldPos,
+    string letter,
+    float smoothScale,
+    Color uniqueColor
+)
+        {
+            Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
+            screenPos.y = Screen.height - screenPos.y;
+
+            float baseSize = 50f;
+            float scaleValue = smoothScale * 25f;
+            float iconSize = Mathf.Max(baseSize - scaleValue, 15f);
+
+            Rect rect = new Rect(
+                screenPos.x - iconSize * 0.5f,
+                screenPos.y - iconSize * 0.5f,
+                iconSize,
+                iconSize
+            );
+
+            float alpha = Mathf.Lerp(1f, 0.4f, smoothScale);
+
+            GUI.Box(rect, GUIContent.none);
+
+            GUIStyle style = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = (int)(iconSize * 0.6f),
+            };
+
+            GUI.Label(rect, letter.ToString(), style);
+
         }
 
         private static void zEnsurePlayerTransform()
