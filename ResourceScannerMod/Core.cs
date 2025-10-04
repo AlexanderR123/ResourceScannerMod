@@ -28,6 +28,7 @@ namespace ResourceScannerMod
         private static MelonPreferences_Entry<bool> _PrefEnableColors;
         private static MelonPreferences_Entry<bool> _PrefShowGordo;
         private static MelonPreferences_Entry<bool> _PrefShowDirectedAnimalSpawner;
+        private static MelonPreferences_Entry<bool> _PrefShowVacuumableFood;
 
 
         // Caching-Felder
@@ -35,8 +36,9 @@ namespace ResourceScannerMod
         private static List<CachedVacuumableData> _CachedVacuumableData = new List<CachedVacuumableData>();
         private static List<CachedTreasurePodData> _CachedTreasurePodData = new List<CachedTreasurePodData>();
         private static List<CachedGordoData> _CachedGordoData = new List<CachedGordoData>();
-        private static List<CachedDirectedAnimalSpawnerData> _CachedDirectedAnimalSpawnerData =new List<CachedDirectedAnimalSpawnerData>();
-
+        private static List<CachedDirectedAnimalSpawnerData> _CachedDirectedAnimalSpawnerData = new List<CachedDirectedAnimalSpawnerData>();
+        private static List<CachedVacuumableData> _CachedVacuumableFoodData = new List<CachedVacuumableData>();
+        
         private static float _LastDataUpdateTime = 0f;
         private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
 
@@ -92,8 +94,10 @@ namespace ResourceScannerMod
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
             _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
             _PrefEnableColors = _PrefsCategory.CreateEntry("EnableTintColors", false, "Enable colored tint on icons");
-            _PrefShowGordo = _PrefsCategory.CreateEntry("ShowGordo",false,"Shows Gordos");
-            _PrefShowDirectedAnimalSpawner = _PrefsCategory.CreateEntry("ShowDirectedAnimalSpawner",false,"Shows Directed Animal Spawners");
+            _PrefShowGordo = _PrefsCategory.CreateEntry("ShowGordo", false, "Shows Gordos");
+            _PrefShowDirectedAnimalSpawner = _PrefsCategory.CreateEntry("ShowDirectedAnimalSpawner", false, "Shows Directed Animal Spawners");
+            _PrefShowVacuumableFood = _PrefsCategory.CreateEntry("ShowVacuumableFood", false, "Show Vacuumable Food");
+
             // Neue Performance-Einstellungen
             var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
 
@@ -344,6 +348,42 @@ namespace ResourceScannerMod
                 );
             }
 
+
+            if (_PrefShowVacuumableFood.Value)
+            {
+                var allVacuumables1 = GameObject.FindObjectsOfType<Vacuumable>();
+
+                _CachedVacuumableFoodData.Clear();
+
+                foreach (var vacuumable in allVacuumables1)
+                {
+                    if (vacuumable?.transform == null ||
+                        vacuumable._identifiable?.identType?.groupType == null ||
+                        vacuumable._identifiable.identType.icon?.texture == null) continue;
+
+                    var groupName = vacuumable._identifiable.identType.groupType.name;
+
+                    if (groupName == "ResourceOreGroup" && groupName == "ResourceWeatherGroup") continue;
+
+                    var worldPos = vacuumable.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedVacuumableFoodData.Add(new CachedVacuumableData()
+                    {
+                        Vacuumable = vacuumable,
+                        WorldPosition = worldPos,
+                        Icon = vacuumable._identifiable.identType.icon.texture,
+                        Distance = distance
+                    });
+                }
+
+                _CachedVacuumableFoodData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
             // Nach Distanz sortieren für bessere Performance beim Zeichnen
             _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
             _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
@@ -367,7 +407,6 @@ namespace ResourceScannerMod
                 ref drawnCount,
                 maxDrawn,
                 215f,
-                Color.green,
                 data =>
                 {
                     if (data.IsHarvestable && _PrefInstantSuck.Value && data.Resource?.resourceNode != null)
@@ -386,8 +425,7 @@ namespace ResourceScannerMod
                 camera,
                 ref drawnCount,
                 maxDrawn,
-                215f,
-                Color.red
+                215f
             );
 
             // -------------------
@@ -400,8 +438,7 @@ namespace ResourceScannerMod
                     camera,
                     ref drawnCount,
                     maxDrawn,
-                    215f,
-                    Color.blue
+                    215f
                 );
             }
 
@@ -412,8 +449,7 @@ namespace ResourceScannerMod
                     camera,
                     ref drawnCount,
                     maxDrawn,
-                    215f, // ggf. anderer Offset als bei Pods
-                    Color.white
+                    215f
                 );
             }
 
@@ -424,9 +460,18 @@ namespace ResourceScannerMod
                     camera,
                     ref drawnCount,
                     maxDrawn,
-                    300f,
-                    Color.green
+                    215f
                 );
+            }
+
+            if (_PrefShowVacuumableFood.Value)
+            {
+                DrawDataList(
+                    _CachedVacuumableFoodData, 
+                    camera,
+                    ref drawnCount, 
+                    maxDrawn, 
+                    215f);
             }
 
         }
@@ -440,7 +485,6 @@ namespace ResourceScannerMod
             ref int drawnCount,
             int maxDrawn,
             float maxDistance,
-            Color uniqueColor,
             Action<T>? specialAction = null
         ) where T : CachedWorldIconData
         {
@@ -461,16 +505,14 @@ namespace ResourceScannerMod
                 // --- Scale ---
                 float smoothScale = Mathf.Clamp01(Remap(data.Distance, 0f, 215f, 0f, 1f));
 
-                int steps = 4;
-
                 if (data.Icon == null)
                 {
-                    DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale, uniqueColor);
+                    DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale);
                 }
                 else
                 {
                     // --- Icon zeichnen ---
-                    DrawIcon(data.WorldPosition, data.Icon, smoothScale, uniqueColor, steps);
+                    DrawIcon(data.WorldPosition, data.Icon, smoothScale);
                 }
                 drawnCount++;
             }
@@ -482,7 +524,12 @@ namespace ResourceScannerMod
             return from2 + (value - from1) * (to2 - from2) / (to1 - from1);
         }
 
-        private static void DrawIcon(Vector3 worldPos, Texture2D icon, float smoothScale, Color uniqueColor, int colorSteps = 5)
+
+        private static void DrawIcon(
+    Vector3 worldPos,
+    Texture2D icon,
+    float smoothScale
+)
         {
             Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
             screenPos.y = Screen.height - screenPos.y;
@@ -506,22 +553,27 @@ namespace ResourceScannerMod
             GUI.color = new Color(0f, 0f, 1f, alpha * 0.8f);
             GUI.Box(rect, GUIContent.none);
 
-            // ---------- Farbe fürs Icon ----------
+            // ---------- Ampel-Farblogik ----------
             Color iconColor;
 
             if (_PrefEnableColors.Value)
             {
-                // Step Scale (z. B. 5 Stufen)
-                float stepScale = Mathf.Round(smoothScale * colorSteps) / colorSteps;
+                // Ampel-System basierend auf smoothScale
+                // 0–0.25: neutral | 0.25–0.5: grün | 0.5–0.75: gelb | 0.75–1.0: rot
+                float tintAlpha = 0.5f * alpha;
 
-                // "nah" -> weiß, "fern" -> uniqueColor
-                Color baseIconColor = new Color(1f, 1f, 1f, alpha);
-                iconColor = Color.Lerp(baseIconColor, uniqueColor, stepScale);
-                iconColor.a = alpha;
+                if (smoothScale < 0.25f)
+                    iconColor = new Color(1f, 1f, 1f, tintAlpha); // neutral
+                else if (smoothScale < 0.5f)
+                    iconColor = new Color(0f, 1f, 0f, tintAlpha); // grün
+                else if (smoothScale < 0.75f)
+                    iconColor = new Color(1f, 1f, 0f, tintAlpha); // gelb
+                else
+                    iconColor = new Color(1f, 0f, 0f, tintAlpha); // rot
             }
             else
             {
-                // Default nur weiß
+                // Wenn ausgeschaltet -> immer weiß
                 iconColor = new Color(1f, 1f, 1f, alpha);
             }
 
@@ -531,19 +583,11 @@ namespace ResourceScannerMod
             GUI.color = Color.white; // reset
         }
 
-        private static Color GetContrastColor(Color bg)
-        {
-            // relative Helligkeit berechnen
-            float luminance = (0.299f * bg.r + 0.587f * bg.g + 0.114f * bg.b);
-            return luminance > 0.5f ? Color.black : Color.white;
-        }
-
         private static void DrawLetterMarker(
-    Vector3 worldPos,
-    string letter,
-    float smoothScale,
-    Color uniqueColor
-)
+     Vector3 worldPos,
+     string letter,
+     float smoothScale
+ )
         {
             Vector3 screenPos = Camera.main.WorldToScreenPoint(worldPos);
             screenPos.y = Screen.height - screenPos.y;
@@ -561,6 +605,20 @@ namespace ResourceScannerMod
 
             float alpha = Mathf.Lerp(1f, 0.4f, smoothScale);
 
+            // ---------- Ampel-Farblogik ----------
+            float tintAlpha = 0.5f * alpha;
+            Color tintedColor;
+
+            if (smoothScale < 0.25f)
+                tintedColor = new Color(1f, 1f, 1f, tintAlpha);
+            else if (smoothScale < 0.5f)
+                tintedColor = new Color(0f, 1f, 0f, tintAlpha);
+            else if (smoothScale < 0.75f)
+                tintedColor = new Color(1f, 1f, 0f, tintAlpha);
+            else
+                tintedColor = new Color(1f, 0f, 0f, tintAlpha);
+
+            GUI.color = tintedColor;
             GUI.Box(rect, GUIContent.none);
 
             GUIStyle style = new GUIStyle(GUI.skin.label)
@@ -570,7 +628,7 @@ namespace ResourceScannerMod
             };
 
             GUI.Label(rect, letter.ToString(), style);
-
+            GUI.color = Color.white;
         }
 
         private static void zEnsurePlayerTransform()
