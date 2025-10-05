@@ -38,7 +38,7 @@ namespace ResourceScannerMod
         private static List<CachedGordoData> _CachedGordoData = new List<CachedGordoData>();
         private static List<CachedDirectedAnimalSpawnerData> _CachedDirectedAnimalSpawnerData = new List<CachedDirectedAnimalSpawnerData>();
         private static List<CachedVacuumableData> _CachedVacuumableFoodData = new List<CachedVacuumableData>();
-        
+
         private static float _LastDataUpdateTime = 0f;
         private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
 
@@ -114,6 +114,14 @@ namespace ResourceScannerMod
             if (Keyboard.current[lToggleKey].wasPressedThisFrame)
             {
                 ToggleShowResources();
+            }
+            if (Keyboard.current[Key.L].wasPressedThisFrame)
+            {
+                _PrefShowTreasurePod.Value = !_PrefShowTreasurePod.Value;
+                if (_PrefShowTreasurePod.Value)
+                    MelonLogger.Msg("Show Treasurepods Enabled");
+                else 
+                    MelonLogger.Msg("Show Treasurepods Disabled");
             }
         }
 
@@ -272,6 +280,30 @@ namespace ResourceScannerMod
                         TreasurePod = treasurePod,
                         WorldPosition = worldPos,
                         Icon = lIcon,
+                        Distance = distance
+                    });
+                }
+
+                var plortDepositors = GameObject.FindObjectsOfType<Il2Cpp.PlortDepositor>();
+
+                foreach (var plortCollector in plortDepositors)
+                {
+                    if (plortCollector?.transform == null) continue;
+
+                    if (!plortCollector.IsLocked()) continue;
+
+                    var icon = plortCollector.IdentifiableTypeToCatch.icon?.texture;
+
+                    var worldPos = plortCollector.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedTreasurePodData.Add(new CachedTreasurePodData()
+                    {
+                        WorldPosition = worldPos,
+                        Icon = icon,
+                        Letter = "C",
                         Distance = distance
                     });
                 }
@@ -467,10 +499,10 @@ namespace ResourceScannerMod
             if (_PrefShowVacuumableFood.Value)
             {
                 DrawDataList(
-                    _CachedVacuumableFoodData, 
+                    _CachedVacuumableFoodData,
                     camera,
-                    ref drawnCount, 
-                    maxDrawn, 
+                    ref drawnCount,
+                    maxDrawn,
                     215f);
             }
 
@@ -505,15 +537,12 @@ namespace ResourceScannerMod
                 // --- Scale ---
                 float smoothScale = Mathf.Clamp01(Remap(data.Distance, 0f, 215f, 0f, 1f));
 
-                if (data.Icon == null)
-                {
-                    DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale);
-                }
-                else
-                {
-                    // --- Icon zeichnen ---
+                if (data.Icon != null)
                     DrawIcon(data.WorldPosition, data.Icon, smoothScale);
-                }
+                    
+                else
+                    DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale);
+
                 drawnCount++;
             }
         }
