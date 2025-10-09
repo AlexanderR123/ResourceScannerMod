@@ -1,6 +1,9 @@
 ﻿using Il2Cpp;
+using Il2CppInterop.Runtime;
 using Il2CppMonomiPark.SlimeRancher;
 using Il2CppMonomiPark.SlimeRancher.UI;
+using Il2CppMonomiPark.SlimeRancher.World;
+using Il2CppSony.NP;
 using MelonLoader;
 using System.Reflection;
 using UnityEngine;
@@ -20,16 +23,57 @@ namespace ResourceScannerMod
         private static bool _WaitingForResources = false;
         private static Transform _PlayerTransform;
 
+        private static float _LastDataUpdateTime = 0f;
+        private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
+
+        #region Settings
+
         private static MelonPreferences_Category _PrefsCategory;
+
+        #region Default
+
         private static MelonPreferences_Entry<float> _PrefDetectionRadius;
         private static MelonPreferences_Entry<Key> _PrefToggleKey;
-        private static MelonPreferences_Entry<bool> _PrefInstantSuck;
-        private static MelonPreferences_Entry<bool> _PrefShowTreasurePod;
-        private static MelonPreferences_Entry<bool> _PrefEnableColors;
-        private static MelonPreferences_Entry<bool> _PrefShowGordo;
-        private static MelonPreferences_Entry<bool> _PrefShowDirectedAnimalSpawner;
-        private static MelonPreferences_Entry<bool> _PrefShowVacuumableFood;
+        private static MelonPreferences_Entry<int> _MaxDrawnResources;
 
+        #endregion Default
+
+        #region Extra
+
+        private static MelonPreferences_Entry<bool> _PrefInstantSuck;
+        private static MelonPreferences_Entry<bool> _PrefEnableColors;
+
+        #endregion Extra
+
+        #region Show Options
+
+        private static MelonPreferences_Entry<bool> _PrefShowResources;
+        private static MelonPreferences_Entry<Key> _PrefShowResourcesKey;
+        private static MelonPreferences_Entry<bool> _PrefShowTreasurePod;
+        private static MelonPreferences_Entry<Key> _PrefShowTreasurePodKey;
+        private static MelonPreferences_Entry<bool> _PrefShowGordo;
+        private static MelonPreferences_Entry<Key> _PrefShowGordoKey;
+        private static MelonPreferences_Entry<bool> _PrefShowDirectedAnimalSpawner;
+        private static MelonPreferences_Entry<Key> _PrefShowDirectedAnimalSpawnerKey;
+        private static MelonPreferences_Entry<bool> _PrefShowVacuumableFood;
+        private static MelonPreferences_Entry<Key> _PrefShowVacuumableFoodKey;
+        private static MelonPreferences_Entry<bool> _PrefShowCrates;
+        private static MelonPreferences_Entry<Key> _PrefShowCratesKey;
+
+        private static MelonPreferences_Entry<bool> _PrefSpoilerSafeMode;
+        private static MelonPreferences_Entry<Key> _PrefSpoilerSafeModeKey;
+
+        private static MelonPreferences_Entry<bool> _PrefShowGadgetTracker;
+        private static MelonPreferences_Entry<Key> _PrefShowGadgetTrackerKey;
+        private static MelonPreferences_Entry<bool> _PrefShowUnstablePrismaPlorts;
+        private static MelonPreferences_Entry<Key> _PrefShowUnstablePrismaPlortsKey;
+        private static MelonPreferences_Entry<bool> _PrefShowPlortStatues;
+        private static MelonPreferences_Entry<Key> _PrefShowPlortStatuesKey;
+        #endregion Show Options
+
+        #endregion Settings
+
+        #region Data Caching
 
         // Caching-Felder
         private static List<CachedResourceData> _CachedResourceData = new List<CachedResourceData>();
@@ -38,11 +82,15 @@ namespace ResourceScannerMod
         private static List<CachedGordoData> _CachedGordoData = new List<CachedGordoData>();
         private static List<CachedDirectedAnimalSpawnerData> _CachedDirectedAnimalSpawnerData = new List<CachedDirectedAnimalSpawnerData>();
         private static List<CachedVacuumableData> _CachedVacuumableFoodData = new List<CachedVacuumableData>();
+        private static List<CachedVacuumableData> _CachedCachedCrateData = new List<CachedVacuumableData>();
+        private static List<CachedWorldData> _CachedGadgetData = new List<CachedWorldData>();
+        private static List<CachedVacuumableData> _CachedCachedUnstablePrismaPlortsData = new List<CachedVacuumableData>();
+        private static List<CachedWorldData> _CachedCachedPlortStatuesData = new List<CachedWorldData>();
 
-        private static float _LastDataUpdateTime = 0f;
-        private static float _DataUpdateInterval = 2.5f; // Daten alle 0.1s aktualisieren
+        #endregion Data Caching
 
-        public abstract class CachedWorldIconData
+
+        public class CachedWorldData
         {
             public Vector3 WorldPosition;
             public string Letter;
@@ -50,36 +98,35 @@ namespace ResourceScannerMod
             public float Distance;
         }
 
-        public class CachedResourceData : CachedWorldIconData
+        public class CachedResourceData : CachedWorldData
         {
             public ResourceNodeUIInteractable Resource;
             public bool IsHarvestable;
         }
 
-        public class CachedTreasurePodData : CachedWorldIconData
+        public class CachedTreasurePodData : CachedWorldData
         {
             public TreasurePodUIInteractable TreasurePod;
             public bool IsCollectable;
         }
 
-        public class CachedVacuumableData : CachedWorldIconData
+        public class CachedVacuumableData : CachedWorldData
         {
             public Vacuumable Vacuumable;
         }
 
-        public class CachedGordoData : CachedWorldIconData
+        public class CachedGordoData : CachedWorldData
         {
             public GordoIdentifiable Gordo;
             public bool IsActive;
         }
 
-        public class CachedDirectedAnimalSpawnerData : CachedWorldIconData
+        public class CachedDirectedAnimalSpawnerData : CachedWorldData
         {
             public DirectedAnimalSpawner Spawner;
             public bool IsAvailable;
         }
 
-        private static int _MaxDrawnResources = 100; // Maximal gleichzeitig gezeichnete Ressourcen
         #endregion
 
         #region Melon Methods
@@ -89,40 +136,103 @@ namespace ResourceScannerMod
             LoggerInstance.Msg("Initialized.");
 
             _PrefsCategory = MelonPreferences.CreateCategory("ResourceScanner");
+
+            // Default
             _PrefDetectionRadius = _PrefsCategory.CreateEntry("DetectionRadius", 200f, "Detection Radius");
             _PrefToggleKey = _PrefsCategory.CreateEntry("ToggleKey", Key.K, "Toggle Key");
+            _MaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
+
+            // Extra
             _PrefInstantSuck = _PrefsCategory.CreateEntry("InstantSuck", false, "Remove Resource Extraction Delay");
-            _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
             _PrefEnableColors = _PrefsCategory.CreateEntry("EnableTintColors", false, "Enable colored tint on icons");
+
+            // Show Options
+            _PrefShowResources = _PrefsCategory.CreateEntry("ShowResources", true, "Shows Resources");
+            _PrefShowResourcesKey = _PrefsCategory.CreateEntry("ShowResourcesKey", Key.Y, "Key for ShowResources");
+            _PrefShowTreasurePod = _PrefsCategory.CreateEntry("ShowTreasurePod", false, "Shows Treasure Pod");
+            _PrefShowTreasurePodKey = _PrefsCategory.CreateEntry("ShowTreasurePodKey", Key.L, "Key for ShowTreasurePod");
             _PrefShowGordo = _PrefsCategory.CreateEntry("ShowGordo", false, "Shows Gordos");
+            _PrefShowGordoKey = _PrefsCategory.CreateEntry("ShowGordoKey", Key.H, "Key for ShowGordo");
             _PrefShowDirectedAnimalSpawner = _PrefsCategory.CreateEntry("ShowDirectedAnimalSpawner", false, "Shows Directed Animal Spawners");
+            _PrefShowDirectedAnimalSpawnerKey = _PrefsCategory.CreateEntry("ShowDirectedAnimalSpawnerKey", Key.U, "Key for ShowDirectedAnimalSpawner");
             _PrefShowVacuumableFood = _PrefsCategory.CreateEntry("ShowVacuumableFood", false, "Show Vacuumable Food");
+            _PrefShowVacuumableFoodKey = _PrefsCategory.CreateEntry("ShowVacuumableFoodKey", Key.V, "Key for ShowVacuumableFood");
+            _PrefShowCrates = _PrefsCategory.CreateEntry("ShowCrates", false, "Shows Crates");
+            _PrefShowCratesKey = _PrefsCategory.CreateEntry("ShowCratesKey", Key.C, "Key for ShowCrates");
 
-            // Neue Performance-Einstellungen
-            var _PrefMaxDrawnResources = _PrefsCategory.CreateEntry("MaxDrawnResources", 100, "Maximum drawn resources");
+            _PrefSpoilerSafeMode = _PrefsCategory.CreateEntry("SpoilerSafeMode", true, "Hide contents for Treasure Pods and Shadow Deposits (icons only)");
+            _PrefSpoilerSafeModeKey = _PrefsCategory.CreateEntry("SpoilerSafeModeKey", Key.P, "Key to toggle Spoiler Safe Mode");
 
-            // Werte anwenden
-            _MaxDrawnResources = _PrefMaxDrawnResources.Value;
+
+            _PrefShowGadgetTracker = _PrefsCategory.CreateEntry("ShowGadgetTracker", true, "Show gadget tracker (teleporters, refinery/market links, other gadgets)");
+            _PrefShowGadgetTrackerKey = _PrefsCategory.CreateEntry("ShowGadgetTrackerKey", Key.Y, "Key for gadget tracker toggle");
+
+            _PrefShowUnstablePrismaPlorts = _PrefsCategory.CreateEntry("ShowUnstablePrismaPlorts", true, "Track unstable/prisma plorts on ground");
+            _PrefShowUnstablePrismaPlortsKey = _PrefsCategory.CreateEntry("ShowUnstablePrismaPlortsKey", Key.P, "Key for unstable/prisma plorts tracker toggle");
+
+            _PrefShowPlortStatues = _PrefsCategory.CreateEntry("ShowPlortStatues", false, "Track plort statues (if detectable)");
+            _PrefShowPlortStatuesKey = _PrefsCategory.CreateEntry("ShowPlortStatuesKey", Key.H, "Key for plort statues tracker toggle");
 
             MelonPreferences.Load();
         }
 
         public override void OnLateUpdate()
         {
-            Key lToggleKey = _PrefToggleKey.Value;
-
-            if (Keyboard.current[lToggleKey].wasPressedThisFrame)
+            if (Keyboard.current[_PrefToggleKey.Value].wasPressedThisFrame)
             {
                 ToggleShowResources();
             }
-            if (Keyboard.current[Key.L].wasPressedThisFrame)
+            else if (Keyboard.current[_PrefShowResourcesKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowResources.Value = !_PrefShowResources.Value;
+                MelonLogger.Msg(_PrefShowResources.Value ? "Show Resources Enabled" : "Show Resources Disabled");
+            }
+            else if (Keyboard.current[_PrefShowTreasurePodKey.Value].wasPressedThisFrame)
             {
                 _PrefShowTreasurePod.Value = !_PrefShowTreasurePod.Value;
-                if (_PrefShowTreasurePod.Value)
-                    MelonLogger.Msg("Show Treasurepods Enabled");
-                else 
-                    MelonLogger.Msg("Show Treasurepods Disabled");
+                MelonLogger.Msg(_PrefShowTreasurePod.Value ? "Show Treasurepods Enabled" : "Show Treasurepods Disabled");
             }
+            else if (Keyboard.current[_PrefShowGordoKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowGordo.Value = !_PrefShowGordo.Value;
+                MelonLogger.Msg(_PrefShowGordo.Value ? "Show Gordos Enabled" : "Show Gordos Disabled");
+            }
+            else if (Keyboard.current[_PrefShowDirectedAnimalSpawnerKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowDirectedAnimalSpawner.Value = !_PrefShowDirectedAnimalSpawner.Value;
+                MelonLogger.Msg(_PrefShowDirectedAnimalSpawner.Value ? "Show Directed Animal Spawners Enabled" : "Show Directed Animal Spawners Disabled");
+            }
+            else if (Keyboard.current[_PrefShowVacuumableFoodKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowVacuumableFood.Value = !_PrefShowVacuumableFood.Value;
+                MelonLogger.Msg(_PrefShowVacuumableFood.Value ? "Show Vacuumable Food Enabled" : "Show Vacuumable Food Disabled");
+            }
+            else if (Keyboard.current[_PrefShowCratesKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowCrates.Value = !_PrefShowCrates.Value;
+                MelonLogger.Msg(_PrefShowCrates.Value ? "Show Crates Enabled" : "Show Crates Disabled");
+            }
+            else if (Keyboard.current[_PrefSpoilerSafeModeKey.Value].wasPressedThisFrame)
+            {
+                _PrefSpoilerSafeMode.Value = !_PrefSpoilerSafeMode.Value;
+                MelonLogger.Msg(_PrefSpoilerSafeMode.Value ? "Spoiler Safe Mode Enabled (icons only)" : "Spoiler Safe Mode Disabled (show contents)");
+            }
+            else if (Keyboard.current[_PrefShowGadgetTrackerKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowGadgetTracker.Value = !_PrefShowGadgetTracker.Value;
+                MelonLogger.Msg(_PrefShowGadgetTracker.Value ? "Gadget Tracker Enabled" : "Gadget Tracker Disabled");
+            }
+            else if (Keyboard.current[_PrefShowUnstablePrismaPlortsKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowUnstablePrismaPlorts.Value = !_PrefShowUnstablePrismaPlorts.Value;
+                MelonLogger.Msg(_PrefShowUnstablePrismaPlorts.Value ? "Unstable/Prisma Plorts Tracker Enabled" : "Unstable/Prisma Plorts Tracker Disabled");
+            }
+            else if (Keyboard.current[_PrefShowPlortStatuesKey.Value].wasPressedThisFrame)
+            {
+                _PrefShowPlortStatues.Value = !_PrefShowPlortStatues.Value;
+                MelonLogger.Msg(_PrefShowPlortStatues.Value ? "Plort Statues Tracker Enabled" : "Plort Statues Tracker Disabled");
+            }
+
         }
 
         public override void OnDeinitializeMelon()
@@ -194,67 +304,77 @@ namespace ResourceScannerMod
             var playerPos = _PlayerTransform.position;
             var detectionRadius = _PrefDetectionRadius.Value;
 
-            // Resource Nodes verarbeiten
-            var allResources = GameObject.FindObjectsOfType<ResourceNodeUIInteractable>();
-            _CachedResourceData.Clear();
-
-            foreach (var resource in allResources)
+            if (_PrefShowResources.Value)
             {
-                if (resource?.gameObject?.activeInHierarchy != true ||
-                    resource.resourceNode == null ||
-                    resource.transform == null) continue;
 
-                var worldPos = resource.transform.position;
-                var distance = Vector3.Distance(playerPos, worldPos);
+                // Resource Nodes verarbeiten
+                var allResources = GameObject.FindObjectsOfType<ResourceNodeUIInteractable>();
+                _CachedResourceData.Clear();
 
-                if (distance > detectionRadius) continue;
-
-                // Icon nur einmal laden und cachen
-                Texture2D icon = null;
-                var resourcesList = resource.resourceNode.GetResources();
-                if (resourcesList?.Count > 0 && resourcesList[0]?.icon?.texture != null)
+                foreach (var resource in allResources)
                 {
-                    icon = resourcesList[0].icon.texture;
+                    if (resource?.gameObject?.activeInHierarchy != true ||
+                        resource.resourceNode == null ||
+                        resource.transform == null) continue;
+
+                    var worldPos = resource.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    // Icon nur einmal laden und cachen
+                    Texture2D icon = null;
+                    var resourcesList = resource.resourceNode.GetResources();
+                    if (resourcesList?.Count > 0 && resourcesList[0]?.icon?.texture != null)
+                    {
+                        icon = resourcesList[0].icon.texture;
+                    }
+
+                    if (icon == null) continue;
+
+                    _CachedResourceData.Add(new CachedResourceData
+                    {
+                        Resource = resource,
+                        WorldPosition = worldPos,
+                        Icon = icon,
+                        Distance = distance,
+                        IsHarvestable = resource.resourceNode._harvestAtTime == 0
+                    });
                 }
+                _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
 
-                if (icon == null) continue;
+                // Vacuumables verarbeiten
+                var allVacuumables = GameObject.FindObjectsOfType<Vacuumable>();
+                _CachedVacuumableData.Clear();
 
-                _CachedResourceData.Add(new CachedResourceData
+                foreach (var vacuumable in allVacuumables)
                 {
-                    Resource = resource,
-                    WorldPosition = worldPos,
-                    Icon = icon,
-                    Distance = distance,
-                    IsHarvestable = resource.resourceNode._harvestAtTime == 0
-                });
+                    if (vacuumable?.transform == null ||
+                        vacuumable._identifiable?.identType?.groupType == null ||
+                        vacuumable._identifiable.identType.icon?.texture == null) continue;
+
+                    var groupName = vacuumable._identifiable.identType.groupType.name;
+                    if (groupName != "ResourceOreGroup" && groupName != "ResourceWeatherGroup") continue;
+
+                    var worldPos = vacuumable.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedVacuumableData.Add(new CachedVacuumableData
+                    {
+                        Vacuumable = vacuumable,
+                        WorldPosition = worldPos,
+                        Icon = vacuumable._identifiable.identType.icon.texture,
+                        Distance = distance
+                    });
+                }
+                // Nach Distanz sortieren für bessere Performance beim Zeichnen
+                _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+
             }
 
-            // Vacuumables verarbeiten
-            var allVacuumables = GameObject.FindObjectsOfType<Vacuumable>();
-            _CachedVacuumableData.Clear();
 
-            foreach (var vacuumable in allVacuumables)
-            {
-                if (vacuumable?.transform == null ||
-                    vacuumable._identifiable?.identType?.groupType == null ||
-                    vacuumable._identifiable.identType.icon?.texture == null) continue;
-
-                var groupName = vacuumable._identifiable.identType.groupType.name;
-                if (groupName != "ResourceOreGroup" && groupName != "ResourceWeatherGroup") continue;
-
-                var worldPos = vacuumable.transform.position;
-                var distance = Vector3.Distance(playerPos, worldPos);
-
-                if (distance > detectionRadius) continue;
-
-                _CachedVacuumableData.Add(new CachedVacuumableData
-                {
-                    Vacuumable = vacuumable,
-                    WorldPosition = worldPos,
-                    Icon = vacuumable._identifiable.identType.icon.texture,
-                    Distance = distance
-                });
-            }
 
             if (_PrefShowTreasurePod.Value)
             {
@@ -279,7 +399,8 @@ namespace ResourceScannerMod
                     {
                         TreasurePod = treasurePod,
                         WorldPosition = worldPos,
-                        Icon = lIcon,
+                        Icon = _PrefSpoilerSafeMode.Value ? null : lIcon,
+                        Letter = "T",
                         Distance = distance
                     });
                 }
@@ -302,8 +423,8 @@ namespace ResourceScannerMod
                     _CachedTreasurePodData.Add(new CachedTreasurePodData()
                     {
                         WorldPosition = worldPos,
-                        Icon = icon,
-                        Letter = "C",
+                        Icon = _PrefSpoilerSafeMode.Value ? null : icon,
+                        Letter = "T",
                         Distance = distance
                     });
                 }
@@ -416,9 +537,153 @@ namespace ResourceScannerMod
                 );
             }
 
-            // Nach Distanz sortieren für bessere Performance beim Zeichnen
-            _CachedResourceData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-            _CachedVacuumableData.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            if (_PrefShowCrates.Value)
+            {
+                var allVacuumables = GameObject.FindObjectsOfType<Vacuumable>();
+
+                _CachedCachedCrateData.Clear();
+
+                foreach (var vacuumable in allVacuumables)
+                {
+                    if (vacuumable?.transform == null) continue;
+
+                    var groupName = vacuumable.name;
+
+                    if (groupName != "containerFields01(Clone)") continue;
+
+                    var worldPos = vacuumable.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedCachedCrateData.Add(new CachedVacuumableData()
+                    {
+                        Vacuumable = vacuumable,
+                        WorldPosition = worldPos,
+                        Letter = "C",
+                        Distance = distance
+                    });
+                }
+
+                _CachedCachedCrateData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
+            if (_PrefShowGadgetTracker.Value)
+            {
+                var allGadget = GameObject.FindObjectsOfType<Gadget>();
+
+                _CachedGadgetData.Clear();
+
+                foreach (var gadget in allGadget)
+                {
+                    if (gadget?.transform == null) continue;
+
+                    string letter = "G";
+
+                    if (gadget.IdentTypeAsDefinition?.name == "RefineryLink")
+                    {
+                        letter = "RL";
+                    }
+                    else if (gadget.IdentTypeAsDefinition?.name == "MarketLink")
+                    {
+                        letter = "ML";
+                    }
+                    else if (gadget.IdentTypeAsDefinition.Type == GadgetDefinition.Types.TELEPORTER)
+                    {
+                        letter = "TP";
+                    }
+                    else
+                        continue;
+
+                    var worldPos = gadget.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedGadgetData.Add(new CachedWorldData()
+                    {
+                        WorldPosition = worldPos,
+                        Icon = gadget.identType?.icon?.texture,
+                        Letter = letter,
+                        Distance = distance
+                    });
+                }
+
+                _CachedGadgetData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
+
+            if (_PrefShowUnstablePrismaPlorts.Value)
+            {
+                var allVacuumables = GameObject.FindObjectsOfType<Vacuumable>();
+
+                _CachedCachedUnstablePrismaPlortsData.Clear();
+
+                foreach (var vacuumable in allVacuumables)
+                {
+                    if (vacuumable?.transform == null) continue;
+
+                    var Type = vacuumable._identifiable?.identType?.ReferenceId;
+
+                    if (Type != "IdentifiableType.UnstablePlort" && Type != "IdentifiableType.StablePlort") continue;
+
+                    var worldPos = vacuumable.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedCachedUnstablePrismaPlortsData.Add(new CachedVacuumableData()
+                    {
+                        Vacuumable = vacuumable,
+                        WorldPosition = worldPos,
+                        Icon = vacuumable._identifiable?.identType?.icon?.texture,
+                        Letter = "UP",
+                        Distance = distance
+                    });
+                }
+
+                _CachedCachedUnstablePrismaPlortsData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
+
+            if (_PrefShowPlortStatues.Value)
+            {
+                var allPuzzleSlot = GameObject.FindObjectsOfType<PuzzleSlot>();
+
+                _CachedCachedPlortStatuesData.Clear();
+
+                foreach (var PuzzleSlot in allPuzzleSlot)
+                {
+                    if (PuzzleSlot?.transform == null) continue;
+
+                    var worldPos = PuzzleSlot.transform.position;
+                    var distance = Vector3.Distance(playerPos, worldPos);
+
+                    if ((PuzzleSlot?._activateOnFill[0]?.active ?? false) || (PuzzleSlot._activateOnFill[0]?.activeSelf ?? false))
+                        continue;
+
+                    if (distance > detectionRadius) continue;
+
+                    _CachedCachedPlortStatuesData.Add(new CachedWorldData()
+                    {
+                        WorldPosition = worldPos,
+                        Icon = PuzzleSlot.IdentifiableTypeToCatch?.icon?.texture,
+                        Letter = "DOOR",
+                        Distance = distance
+                    });
+                }
+
+                _CachedCachedPlortStatuesData.Sort(
+                    (a, b) => a.Distance.CompareTo(b.Distance)
+                );
+            }
+
         }
 
 
@@ -428,16 +693,17 @@ namespace ResourceScannerMod
 
             var camera = Camera.main;
             int drawnCount = 0;
-            int maxDrawn = _MaxDrawnResources;
 
-            // -------------------
-            // Resources
-            // -------------------
-            DrawDataList(
+            if (_PrefShowResources.Value)
+            {
+                // -------------------
+                // Resources
+                // -------------------
+                DrawDataList(
                 _CachedResourceData,
                 camera,
                 ref drawnCount,
-                maxDrawn,
+                _MaxDrawnResources.Value,
                 215f,
                 data =>
                 {
@@ -447,18 +713,23 @@ namespace ResourceScannerMod
                         data.Resource.resourceNode._resourceSpawnDelaySeconds = 0.01f;
                     }
                 }
-            );
+                );
 
-            // -------------------
-            // Vacuumables
-            // -------------------
-            DrawDataList(
+
+                // -------------------
+                // Vacuumables
+                // -------------------
+
+
+                DrawDataList(
                 _CachedVacuumableData,
                 camera,
                 ref drawnCount,
-                maxDrawn,
+                _MaxDrawnResources.Value,
                 215f
-            );
+                );
+            }
+
 
             // -------------------
             // TreasurePods
@@ -469,7 +740,7 @@ namespace ResourceScannerMod
                     _CachedTreasurePodData,
                     camera,
                     ref drawnCount,
-                    maxDrawn,
+                    _MaxDrawnResources.Value,
                     215f
                 );
             }
@@ -480,7 +751,7 @@ namespace ResourceScannerMod
                     _CachedGordoData,
                     camera,
                     ref drawnCount,
-                    maxDrawn,
+                    _MaxDrawnResources.Value,
                     215f
                 );
             }
@@ -491,7 +762,7 @@ namespace ResourceScannerMod
                     _CachedDirectedAnimalSpawnerData,
                     camera,
                     ref drawnCount,
-                    maxDrawn,
+                    _MaxDrawnResources.Value,
                     215f
                 );
             }
@@ -502,7 +773,47 @@ namespace ResourceScannerMod
                     _CachedVacuumableFoodData,
                     camera,
                     ref drawnCount,
-                    maxDrawn,
+                    _MaxDrawnResources.Value,
+                    215f);
+            }
+
+            if (_PrefShowCrates.Value)
+            {
+                DrawDataList(
+                    _CachedCachedCrateData,
+                    camera,
+                    ref drawnCount,
+                    _MaxDrawnResources.Value,
+                    215f);
+            }
+
+            if (_PrefShowGadgetTracker.Value)
+            {
+                DrawDataList(
+                    _CachedGadgetData,
+                    camera,
+                    ref drawnCount,
+                    _MaxDrawnResources.Value,
+                    215f);
+            }
+
+            if (_PrefShowUnstablePrismaPlorts.Value)
+            {
+                DrawDataList(
+                    _CachedCachedUnstablePrismaPlortsData,
+                    camera,
+                    ref drawnCount,
+                    _MaxDrawnResources.Value,
+                    215f);
+            }
+
+            if (_PrefShowPlortStatues.Value)
+            {
+                DrawDataList(
+                    _CachedCachedPlortStatuesData,
+                    camera,
+                    ref drawnCount,
+                    _MaxDrawnResources.Value,
                     215f);
             }
 
@@ -518,7 +829,7 @@ namespace ResourceScannerMod
             int maxDrawn,
             float maxDistance,
             Action<T>? specialAction = null
-        ) where T : CachedWorldIconData
+        ) where T : CachedWorldData
         {
             foreach (var data in dataList)
             {
@@ -539,7 +850,7 @@ namespace ResourceScannerMod
 
                 if (data.Icon != null)
                     DrawIcon(data.WorldPosition, data.Icon, smoothScale);
-                    
+
                 else
                     DrawLetterMarker(data.WorldPosition, data.Letter, smoothScale);
 
